@@ -10,7 +10,7 @@
 #include<cmath>
 
 void create_plane(open3d::geometry::TriangleMesh& mesh, const double& radius, const int& nelements, const double& offset) {
-    const double spacing = 2*M_PI*radius / (nelements*1.2);
+    const double spacing = 2*M_PI*radius / (nelements*1.5); // TODO find a better way to calculate the spacing
     const int number_of_points = static_cast<int>(2*radius / spacing) + 2;
     const double cutoff = radius + spacing;
    
@@ -96,19 +96,6 @@ std::vector<long unsigned int> get_closest_neighbors(std::vector<Eigen::Vector3d
     return closest_neighbors;
 }
 
-template <typename T>
-std::vector<T> extractElements(const std::vector<T>& largerVector, const std::vector<size_t>& indices) {
-    std::vector<T> extractedElements;
-    for (size_t index : indices) {
-        // Check if the index is within the bounds of the larger vector
-        if (index < largerVector.size()) {
-            // Add the element at the specified index to the extracted elements
-            extractedElements.push_back(largerVector[index]);
-        }
-    }
-    return extractedElements;
-}
-
 std::vector<Eigen::Vector3d> create_circle_positions(const double& radius, const double& offset, const int& number_of_elements) {
     double arc_spacing = 2*M_PI / (number_of_elements);
     std::vector<Eigen::Vector3d> positions;
@@ -187,9 +174,8 @@ void create_sides(open3d::geometry::TriangleMesh& mesh, const double& radius, co
     repositionVertices(mesh, outside_vertices, radius, offset, number_of_elements);
 }
 
-
 int main() {
-    for (int i = 30; i <= 50; i++) {
+    for (int i = 6; i <= 30; i++) {
         open3d::geometry::TriangleMesh* mesh = new open3d::geometry::TriangleMesh();
         std::string filename = "test" + std::to_string(i) + ".obj";
         create_sides(*mesh, 1.0, i, 1.0);
