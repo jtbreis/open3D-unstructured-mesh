@@ -2,46 +2,51 @@
 #include "open3d/io/TriangleMeshIO.h"
 #include "open3d/t/geometry/PointCloud.h"
 #include <iterator>
+#include <limits>
 #include <open3d/geometry/PointCloud.h>
 #include <open3d/geometry/TriangleMesh.h>
 #include<string>
 #include<iostream>
 #include<cmath>
 
-open3d::geometry::TriangleMesh create_plane(double radius, int nelements, double offset) {
-    double spacing = 2*M_PI*radius / nelements;
-    int number_of_points = 2*radius / spacing;
+void create_plane(open3d::geometry::TriangleMesh& mesh, const double& radius, const int& nelements, const double& offset) {
+    const double spacing = 2*M_PI*radius / (nelements*1.2);
+    const int number_of_points = static_cast<int>(2*radius / spacing) + 2;
+    const double cutoff = radius + spacing;
    
     std::vector<Eigen::Vector3d> points;
     std::vector<long unsigned int> removeidx;
-    for (int i = 0; i <= number_of_points; i++) {
-        for (int j = 0; j <= number_of_points; j++) {
-            double x = -radius + i * spacing;
-            double y = -radius + j * spacing;
+    for (int i = 0; i <= number_of_points; ++i) {
+        for (int j = 0; j <= number_of_points; ++j) {
+            double x = -radius + i * spacing - spacing;
+            double y = -radius + j * spacing - spacing;
             Eigen::Vector3d pos = {x,y,offset};
             points.push_back(pos);
-            if (pos.squaredNorm()-offset > radius-spacing/2) {
+            if (pos.squaredNorm()-offset > cutoff) {
                 removeidx.push_back(points.size()-1);
             }
         }
     }
     // Define faces for the plane
     std::vector<Eigen::Vector3i> faces;
-    for (int i = 0; i < number_of_points; i++) {
-        for (int j = 0; j < number_of_points; j++) {
+    for (int i = 0; i < number_of_points; ++i) {
+        for (int j = 0; j < number_of_points; ++j) {
             int index0 = j + (number_of_points+1) * i;
             int index1 = index0 + 1;
             int index2 = index0 + number_of_points + 1;
             int index3 = index2 + 1;
-            faces.push_back(Eigen::Vector3i(index0, index1, index2));
-            faces.push_back(Eigen::Vector3i(index2, index3, index1));
+            if ((i <= number_of_points/2 && j <= number_of_points/2) || (i > number_of_points/2 && j > number_of_points/2)) {
+                faces.push_back(Eigen::Vector3i(index0, index2, index3));
+                faces.push_back(Eigen::Vector3i(index0, index1, index3));
+            } else {
+                faces.push_back(Eigen::Vector3i(index0, index1, index2));
+                faces.push_back(Eigen::Vector3i(index1, index2, index3));
+            }
         }
     }
-    open3d::geometry::TriangleMesh mesh;
     mesh.vertices_ = points;
     mesh.triangles_ = faces;
     mesh.RemoveVerticesByIndex(removeidx);
-    return mesh;
 }
 
 std::vector<long unsigned int> get_outside_vertices(open3d::geometry::TriangleMesh& mesh) {
@@ -61,14 +66,14 @@ std::vector<long unsigned int> get_outside_vertices(open3d::geometry::TriangleMe
     return outside_vertices;
 }
 
-std::vector<long unsigned int> get_closest_neighbors(std::vector<Eigen::Vector3d> inside_points, Eigen::Vector3d point) {
-    std::vector<long unsigned int> closest_neighbors(2);
-    std::vector<double> closest_distances = {5, 5};
+std::vector<long unsigned int> get_closest_neighbors(std::vector<Eigen::Vector3d>& inside_points, const Eigen::Vector3d& point) {
+    std::vector<long unsigned int> closest_neighbors(3,0);
+    std::vector<double> closest_distances(3,std::numeric_limits<double>::max());;
     int idx = 0;
     for (Eigen::Vector3d& curr_point : inside_points) {
         Eigen::Vector3d distance = curr_point - point; 
         double length = distance.squaredNorm();
-        if (length > closest_distances[1]) {
+        if (length > closest_distances[2]) {
             ++idx;
             continue;
         }
@@ -77,9 +82,14 @@ std::vector<long unsigned int> get_closest_neighbors(std::vector<Eigen::Vector3d
             closest_distances[1] = closest_distances[0];
             closest_neighbors[0] = idx;
             closest_distances[0] = length;
-        } else {
+        } else if (length < closest_distances[1]) {
+            closest_neighbors[2] = closest_neighbors[1];
+            closest_distances[2] = closest_distances[1];
             closest_neighbors[1] = idx;
             closest_distances[1] = length;
+        } else {
+            closest_neighbors[2] = idx;
+            closest_distances[2] = length;
         }
         ++idx;
     }
@@ -99,7 +109,7 @@ std::vector<T> extractElements(const std::vector<T>& largerVector, const std::ve
     return extractedElements;
 }
 
-std::vector<Eigen::Vector3d> create_circle_positions(double radius, double offset, int number_of_elements) {
+std::vector<Eigen::Vector3d> create_circle_positions(const double& radius, const double& offset, const int& number_of_elements) {
     double arc_spacing = 2*M_PI / (number_of_elements);
     std::vector<Eigen::Vector3d> positions;
     for (double angle = 0; angle < 2*M_PI; angle+=arc_spacing) {
@@ -111,90 +121,79 @@ std::vector<Eigen::Vector3d> create_circle_positions(double radius, double offse
     return positions;
 }
 
-void make_circle(open3d::geometry::TriangleMesh& mesh, std::vector<long unsigned int> outside_vertices, 
-                                           std::vector<Eigen::Vector3d> outside_positions, int number_of_elements) {
-    std::vector<Eigen::Vector3d> circle_positions = create_circle_positions(1.0, 1.0, number_of_elements);
-    std::vector<Eigen::Vector3i> faces;
-    std::vector<int> connections(circle_positions.size());
-    int curr_idx;
-    int idx_offset = mesh.vertices_.size();
-    long unsigned int i = 0;
-    for (Eigen::Vector3d& pos : circle_positions) {
-        std::vector<long unsigned int> neighbor_idx = get_closest_neighbors(outside_positions, pos);
-        std::vector<long unsigned int> outside_idx = extractElements(outside_vertices, neighbor_idx);
-        curr_idx = i + idx_offset;
-        long unsigned int index_1 = (i == number_of_elements-1) ? idx_offset : curr_idx+1;
-        if (i == 0) {
-            connections[i]=outside_idx[0];
-            faces.push_back(Eigen::Vector3i(curr_idx, outside_idx[0], outside_idx[1]));
-            faces.push_back(Eigen::Vector3i(curr_idx, index_1, outside_idx[0]));
-            connections[index_1-idx_offset]=outside_idx[0];
-            i++;
-            continue;
+std::vector<long unsigned int> find_triangle(open3d::geometry::TriangleMesh& mesh, std::vector<long unsigned int>& vertices) {
+    unsigned long int idx = 0;
+    std::vector<long unsigned int> triangle_idx; 
+    for (auto& triangle : mesh.triangles_) {
+        if ((vertices[0] == triangle[0] && vertices[1] == triangle[1]) ||
+            (vertices[0] == triangle[1] && vertices[1] == triangle[0]) ||
+            (vertices[0] == triangle[1] && vertices[1] == triangle[2]) ||
+            (vertices[0] == triangle[2] && vertices[1] == triangle[1]) ||
+            (vertices[0] == triangle[2] && vertices[1] == triangle[0]) ||
+            (vertices[0] == triangle[0] && vertices[1] == triangle[2])) {
+            triangle_idx.push_back(idx);
+            return triangle_idx;
         }
-        if (connections[i]==outside_idx[0]) {
-            faces.push_back(Eigen::Vector3i(curr_idx, index_1, outside_idx[0]));
-            connections[i]=outside_idx[0];
-            connections[index_1-idx_offset]=outside_idx[0];
-        } else {
-            long unsigned int idx = (i == number_of_elements) ? connections[0] : connections[i];
-            faces.push_back(Eigen::Vector3i(curr_idx, outside_idx[0], idx));
-            faces.push_back(Eigen::Vector3i(curr_idx, index_1, outside_idx[0]));
-            connections[i]=outside_idx[0];
-            connections[index_1-idx_offset]=outside_idx[0];
-        }
-        i++;
+        idx++;
     }
-
-    mesh.vertices_.insert(mesh.vertices_.end(), circle_positions.begin(), circle_positions.end());
-    mesh.triangles_.insert(mesh.triangles_.end(), faces.begin(), faces.end());
+    return triangle_idx;
 }
 
-void repositionVertices(open3d::geometry::TriangleMesh& mesh, std::vector<long unsigned int> outside_vertices, double radius, double offset, int nelements) {
-    double spacing = 2*M_PI*radius / nelements;
-    int number_of_outside_vertices = outside_vertices.size();
-    double arc_spacing = 2 * M_PI / number_of_outside_vertices;
-    double angle = 0;
-    long unsigned int last_repositioned = 0;
-    std::vector<Eigen::Vector3d> circle_positions = create_circle_positions(radius-spacing/2, offset, 4*nelements);
-    circle_positions.erase(circle_positions.end()-10, circle_positions.end()-4);
+long unsigned int findMissingValue(const Eigen::Vector3i& values, std::vector<long unsigned int>& points) {
+    for (long unsigned int value : values.array()) {
+        if (value != points[0] && value != points[1]) {
+            return value;
+        }
+    }
+    std::cout << "Value not found\n";
+    return -1; // Value not found
+}
+
+void addMissingConnections(open3d::geometry::TriangleMesh& mesh, std::vector<Eigen::Vector3d>& circle_positions, std::vector<long unsigned int>& connections) {
+    for (long unsigned int idx = 0; idx < connections.size(); ++idx) {
+        if (connections[idx] != 0) {
+            continue;
+        }
+        std::vector<long unsigned int> closest_neighbors = get_closest_neighbors(mesh.vertices_, circle_positions[idx]);
+        std::vector<long unsigned int> triangle_idx = find_triangle(mesh, closest_neighbors);
+        Eigen::Vector3i triangle = mesh.triangles_[triangle_idx[0]];
+        long unsigned int tip_index = findMissingValue(triangle, closest_neighbors);
+
+        if (!triangle_idx.empty()) {
+            mesh.RemoveTrianglesByIndex(triangle_idx);
+        }
+        mesh.vertices_.push_back(circle_positions[idx]);
+        mesh.triangles_.push_back(Eigen::Vector3i(closest_neighbors[0], mesh.vertices_.size()-1, tip_index));
+        mesh.triangles_.push_back(Eigen::Vector3i(closest_neighbors[1], mesh.vertices_.size()-1, tip_index));
+
+        triangle_idx.clear();
+    }
+}
+
+void repositionVertices(open3d::geometry::TriangleMesh& mesh, std::vector<long unsigned int>& outside_vertices, const double& radius, const double& offset, const int& nelements) {
+    std::vector<Eigen::Vector3d> circle_positions = create_circle_positions(radius, offset, nelements);
+    std::vector<long unsigned int> connections(circle_positions.size(), 0);
     for (long unsigned int& idx : outside_vertices) {
         std::vector<long unsigned int> closest_neighbors = get_closest_neighbors(circle_positions, mesh.vertices_[idx]);
         mesh.vertices_[idx] = circle_positions[closest_neighbors[0]];
+        connections[closest_neighbors[0]]++;
     }
+    addMissingConnections(mesh, circle_positions, connections);
 }
 
-open3d::geometry::TriangleMesh create_sides(double radius, int number_of_elements, double offset) {
-    open3d::geometry::TriangleMesh plane = create_plane(radius, number_of_elements, offset);
-
-    std::vector<long unsigned int> outside_vertices = get_outside_vertices(plane);
-    repositionVertices(plane, outside_vertices, radius, offset, number_of_elements);
-    std::vector<Eigen::Vector3d> pos_outside_vertices = extractElements(plane.vertices_, outside_vertices);
-
-    make_circle(plane, outside_vertices, pos_outside_vertices, number_of_elements);
-    return plane;
+void create_sides(open3d::geometry::TriangleMesh& mesh, const double& radius, const int& number_of_elements, const double& offset) {
+    create_plane(mesh, radius, number_of_elements, offset);
+    std::vector<long unsigned int> outside_vertices = get_outside_vertices(mesh);
+    repositionVertices(mesh, outside_vertices, radius, offset, number_of_elements);
 }
 
 
 int main() {
-    //auto hull = open3d::geometry::TriangleMesh::CreateCylinder(1.0,2.0,20,1);
-    //std::vector<long unsigned int> removeidx= {0,1};
-    //hull->RemoveVerticesByIndex(removeidx);
-    //open3d::geometry::PointCloud hull_points;
-    //hull_points.points_ = hull->vertices_;
-    //hull_points.normals_ = hull->vertex_normals_;
-    //open3d::geometry::TriangleMesh bottom_points = create_plane(1.0, 0.1, 1.0);
-    //open3d::geometry::PointCloud cylinder;
-    //cylinder += hull_points;
-    //cylinder += top_points;
-    //cylinder += bottom_points;
-
-//    for (int i = 8; i <= 26; i++) {
-    int i = 42;
+    for (int i = 30; i <= 50; i++) {
+        open3d::geometry::TriangleMesh* mesh = new open3d::geometry::TriangleMesh();
         std::string filename = "test" + std::to_string(i) + ".obj";
-        open3d::geometry::TriangleMesh mesh = create_sides(1.0, i, 1.0);
-        open3d::io::WriteTriangleMeshToOBJ(filename, mesh, false, false, true, false, false, false);
-//    }
-
+        create_sides(*mesh, 1.0, i, 1.0);
+        open3d::io::WriteTriangleMeshToOBJ(filename,*mesh, false, false, true, false, false, false);
+    }
     return 0;
 }
